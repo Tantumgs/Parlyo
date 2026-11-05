@@ -1844,10 +1844,11 @@ class _WordsPageState extends State<WordsPage> {
               final got = widget.progress.learn(
                 '${level.code}-${current.word}',
               );
-              if (got)
+              if (got) {
                 _toast(context, 'Новое слово — +10 XP!');
-              else
+              } else {
                 _toast(context, 'Ты уже изучил это слово');
+              }
             },
             onSpeak: () => _speak(context, current.word),
           ),

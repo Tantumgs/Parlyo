@@ -1,17 +1,61 @@
-# parlyo
+# Parlyo
 
-A new Flutter project.
+Приложение для изучения английского языка на русском (уровни A1–C1). В репозитории есть две версии:
 
-## Getting Started
+- **Web (Vite + React + TypeScript)** — в `src/`
+- **Flutter (Android/iOS/Web)** — в `lib/`
 
-This project is a starting point for a Flutter application.
+## Запуск
 
-A few resources to get you started if this is your first Flutter project:
+### Веб-версия (Vite)
+Требования: Node.js 18+, npm.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```bash
+npm install
+npm run dev
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Приложение запустится на `http://127.0.0.1:5183`.
+
+Сборка и предпросмотр:
+```bash
+npm run build
+npm run preview
+```
+
+### Flutter-версия
+Требования: Flutter SDK (совместим с Dart ^3.12.1).
+
+```bash
+flutter pub get
+flutter run
+```
+
+Для запуска в Chrome (Flutter Web):
+```bash
+flutter run -d chrome
+flutter build web
+```
+
+## Сборка APK (Android)
+Требования: настроенный Android SDK.
+
+Собрать release APK:
+```bash
+flutter build apk --release
+```
+
+Готовый файл:
+```
+build/app/outputs/flutter-apk/app-release.apk
+```
+
+Установить на подключённое устройство:
+```bash
+adb install build/app/outputs/flutter-apk/app-release.apk
+```
+
+Если нужен отдельный APK под каждую архитектуру:
+```bash
+flutter build apk --split-per-abi --release
+```
