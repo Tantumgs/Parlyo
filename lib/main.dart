@@ -1,14 +1,23 @@
 import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  if (!kIsWeb) await GoogleSignIn.instance.initialize();
   final progress = ProgressController();
   await progress.load();
   runApp(ParlyoApp(progress: progress));
@@ -362,6 +371,8 @@ class ProgressController extends ChangeNotifier {
   String displayName = 'Ученик';
   final Map<String, int> dailyXp = {};
   bool loaded = false;
+  User? user;
+  StreamSubscription<User?>? _authSubscription;
 
   int get userLevel {
     var remaining = xp;
@@ -440,6 +451,13 @@ class ProgressController extends ChangeNotifier {
     }
     loaded = true;
     notifyListeners();
+    _authSubscription ??= FirebaseAuth.instance.authStateChanges().listen((
+      nextUser,
+    ) async {
+      user = nextUser;
+      if (nextUser != null) await _loadCloud(nextUser.uid);
+      notifyListeners();
+    });
     // Persist the normalized unlock chain after loading/migrating older saves.
     unawaited(_save());
   }
@@ -465,10 +483,110 @@ class ProgressController extends ChangeNotifier {
           'dailyXp': dailyXp,
         }),
       );
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser != null) {
+        await FirebaseDatabase.instance.ref('users/${currentUser.uid}').set({
+          'xp': xp,
+          'selectedLevel': selectedLevel,
+          'learnedWords': learnedWords.toList(),
+          'completedLevels': completedLevels.toList(),
+          'unlockedLevels': unlockedLevels.toList(),
+          'quizzesDone': quizzesDone,
+          'correctAnswers': correctAnswers,
+          'totalAnswers': totalAnswers,
+          'streak': streak,
+          'bestStreak': bestStreak,
+          'lastActive': lastActive,
+          'displayName': displayName,
+          'dailyXp': dailyXp,
+          'email': currentUser.email,
+          'updatedAt': ServerValue.timestamp,
+        });
+      }
     } catch (_) {
       // UI remains usable if local storage is unavailable.
     }
   }
+
+  Future<void> _loadCloud(String uid) async {
+    try {
+      final snapshot = await FirebaseDatabase.instance.ref('users/$uid').get();
+      final raw = snapshot.value;
+      if (raw is! Map) return;
+      final data = Map<String, dynamic>.from(raw);
+      xp = _asInt(data['xp']);
+      selectedLevel = _asInt(data['selectedLevel']).clamp(0, levels.length - 1);
+      learnedWords
+        ..clear()
+        ..addAll(_asStrings(data['learnedWords']));
+      completedLevels
+        ..clear()
+        ..addAll(_asStrings(data['completedLevels']));
+      unlockedLevels
+        ..clear()
+        ..addAll(_asStrings(data['unlockedLevels']));
+      unlockedLevels.add('A1');
+      quizzesDone = _asInt(data['quizzesDone']);
+      correctAnswers = _asInt(data['correctAnswers']);
+      totalAnswers = _asInt(data['totalAnswers']);
+      streak = _asInt(data['streak']);
+      bestStreak = _asInt(data['bestStreak']);
+      lastActive = data['lastActive']?.toString() ?? '';
+      displayName = data['displayName']?.toString() ?? displayName;
+      dailyXp
+        ..clear()
+        ..addAll(_asIntMap(data['dailyXp']));
+    } catch (_) {
+      // Keep local progress if cloud data is unavailable.
+    }
+  }
+
+  Future<void> signIn(String email, String password) async {
+    await FirebaseAuth.instance.signInWithEmailAndPassword(
+      email: email.trim(),
+      password: password,
+    );
+  }
+
+  Future<void> signUp(String email, String password) async {
+    await FirebaseAuth.instance.createUserWithEmailAndPassword(
+      email: email.trim(),
+      password: password,
+    );
+  }
+
+  Future<void> signOut() async {
+    await FirebaseAuth.instance.signOut();
+  }
+
+  Future<void> signInWithGoogle() async {
+    if (kIsWeb || !GoogleSignIn.instance.supportsAuthenticate()) {
+      throw StateError(
+        'Google Sign-In доступен в мобильной версии приложения.',
+      );
+    }
+    final googleUser = await GoogleSignIn.instance.authenticate();
+    final googleAuth = googleUser.authentication;
+    final credential = GoogleAuthProvider.credential(
+      idToken: googleAuth.idToken,
+    );
+    await FirebaseAuth.instance.signInWithCredential(credential);
+  }
+
+  @override
+  void dispose() {
+    final subscription = _authSubscription;
+    if (subscription != null) unawaited(subscription.cancel());
+    super.dispose();
+  }
+
+  static int _asInt(dynamic value) =>
+      value is num ? value.toInt() : int.tryParse('$value') ?? 0;
+  static List<String> _asStrings(dynamic value) =>
+      value is List ? value.map((item) => '$item').toList() : <String>[];
+  static Map<String, int> _asIntMap(dynamic value) => value is Map
+      ? value.map((key, item) => MapEntry('$key', _asInt(item)))
+      : <String, int>{};
 
   void _updateStreakForToday() {
     final today = _dateKey(DateTime.now());
@@ -575,9 +693,9 @@ class ParlyoApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = ColorScheme.fromSeed(
-      seedColor: purple,
+      seedColor: const Color(0xFF3E607B),
       brightness: Brightness.light,
-      surface: const Color(0xFFFFFCF7),
+      surface: const Color(0xFFEAF3FB),
     );
     return AnimatedBuilder(
       animation: progress,
@@ -587,17 +705,30 @@ class ParlyoApp extends StatelessWidget {
         theme: ThemeData(
           useMaterial3: true,
           colorScheme: scheme,
-          scaffoldBackgroundColor: const Color(0xFFFFFCF7),
+          scaffoldBackgroundColor: const Color(0xFFEAF3FB),
           fontFamily: 'Roboto',
           textTheme: ThemeData.light().textTheme.apply(
             bodyColor: ink,
             displayColor: ink,
           ),
           cardTheme: CardThemeData(
-            color: Colors.white,
-            elevation: 0,
+            color: const Color(0xFFF9FCFF),
+            elevation: 7,
+            shadowColor: const Color(0x667B91A3),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(26),
+              borderRadius: BorderRadius.circular(24),
+            ),
+          ),
+          inputDecorationTheme: InputDecorationTheme(
+            filled: true,
+            fillColor: const Color(0xFFF9FCFF),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide.none,
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: const BorderSide(color: Color(0xFF5B89AD), width: 1.5),
             ),
           ),
         ),
@@ -617,6 +748,103 @@ class _LoadingScreen extends StatelessWidget {
   );
 }
 
+/*
+class ModernShell extends StatefulWidget {
+  const ModernShell({super.key, required this.progress});
+  final ProgressController progress;
+
+  @override
+  State<ModernShell> createState() => _ModernShellState();
+}
+
+class _ModernShellState extends State<ModernShell> {
+  int tab = 0;
+  int levelIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    levelIndex = widget.progress.selectedLevel;
+  }
+
+  void selectLevel(int index) {
+    setState(() => levelIndex = index);
+    widget.progress.selectLevel(index);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pages = [
+      ModernHome(progress: widget.progress, onTab: (value) => setState(() => tab = value), onLevel: selectLevel),
+      ModernWords(progress: widget.progress, levelIndex: levelIndex, onLevel: selectLevel),
+      ModernQuizzes(progress: widget.progress, levelIndex: levelIndex, onLevel: selectLevel),
+      ModernProfile(progress: widget.progress),
+    ];
+    return Scaffold(
+      body: SafeArea(child: Column(children: [
+        Padding(padding: const EdgeInsets.fromLTRB(18, 12, 18, 8), child: Row(children: [
+          Container(width: 40, height: 40, alignment: Alignment.center, decoration: BoxDecoration(gradient: const LinearGradient(colors: [purple, sky]), borderRadius: BorderRadius.circular(13)), child: const Text('P', style: TextStyle(color: Color(0xFF06101F), fontWeight: FontWeight.w900, fontSize: 22))),
+          const SizedBox(width: 10), const Expanded(child: Text('Parlyo\nизучай языки', style: TextStyle(fontWeight: FontWeight.w800, height: 1.05))),
+          Container(padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8), decoration: BoxDecoration(color: purple.withAlpha(45), borderRadius: BorderRadius.circular(30)), child: Text('${widget.progress.xp} XP', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12))),
+        ])),
+        Expanded(child: AnimatedSwitcher(duration: const Duration(milliseconds: 250), child: KeyedSubtree(key: ValueKey(tab), child: pages[tab]))),
+        Padding(padding: const EdgeInsets.fromLTRB(12, 7, 12, 10), child: Container(padding: const EdgeInsets.symmetric(vertical: 7), decoration: BoxDecoration(color: const Color(0xFF10172D), border: Border.all(color: Colors.white.withAlpha(20)), borderRadius: BorderRadius.circular(20)), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+          _ModernNav(icon: Icons.home_rounded, label: 'Главная', active: tab == 0, onTap: () => setState(() => tab = 0)),
+          _ModernNav(icon: Icons.menu_book_rounded, label: 'Слова', active: tab == 1, onTap: () => setState(() => tab = 1)),
+          _ModernNav(icon: Icons.extension_rounded, label: 'Квизы', active: tab == 2, onTap: () => setState(() => tab = 2)),
+          _ModernNav(icon: Icons.person_rounded, label: 'Профиль', active: tab == 3, onTap: () => setState(() => tab = 3)),
+        ]))),
+      ])),
+    );
+  }
+}
+
+class _ModernNav extends StatelessWidget {
+  const _ModernNav({required this.icon, required this.label, required this.active, required this.onTap});
+  final IconData icon; final String label; final bool active; final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => InkWell(onTap: onTap, borderRadius: BorderRadius.circular(14), child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5), child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: active ? sky : Colors.white54, size: 21), Text(label, style: TextStyle(color: active ? Colors.white : Colors.white54, fontSize: 10, fontWeight: FontWeight.w700))])));
+}
+
+class ModernHome extends StatelessWidget {
+  const ModernHome({super.key, required this.progress, required this.onTab, required this.onLevel});
+  final ProgressController progress; final ValueChanged<int> onTab; final ValueChanged<int> onLevel;
+  @override
+  Widget build(BuildContext context) => ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 20), children: [
+    Text(_greeting(), style: const TextStyle(color: sky, fontWeight: FontWeight.w700)),
+    const SizedBox(height: 3), const Text('Учись каждый день 👋', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900)),
+    const SizedBox(height: 5), const Text('Небольшие шаги превращаются в уверенный английский.', style: TextStyle(color: Colors.white60, fontSize: 13)),
+    const SizedBox(height: 18),
+    Container(padding: const EdgeInsets.all(18), decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFF7357E8), Color(0xFF22AFCB)]), borderRadius: BorderRadius.circular(25)), child: Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Цель на сегодня', style: TextStyle(color: Colors.white70, fontSize: 12)), const SizedBox(height: 4), Text('${progress.todayXp} / ${progress.dailyGoal} XP', style: const TextStyle(fontSize: 23, fontWeight: FontWeight.w900)), const SizedBox(height: 10), ClipRRect(borderRadius: BorderRadius.circular(8), child: LinearProgressIndicator(value: (progress.todayXp / progress.dailyGoal).clamp(0.0, 1.0), minHeight: 8, backgroundColor: Colors.white24, color: Colors.white))])), const Text('🔥', style: TextStyle(fontSize: 42))])),
+    const SizedBox(height: 14), Row(children: [_ModernStat(label: 'Уровень', value: '${progress.userLevel}'), const SizedBox(width: 9), _ModernStat(label: 'Слов', value: '${progress.learnedWords.length}'), const SizedBox(width: 9), _ModernStat(label: 'Серия', value: '${progress.streak}д')]),
+    const SizedBox(height: 20), Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('Твой маршрут', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900)), Text('${progress.completedLevels.length}/${levels.length}', style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.w700))]),
+    const SizedBox(height: 10), Container(padding: const EdgeInsets.fromLTRB(12, 15, 12, 16), decoration: BoxDecoration(color: const Color(0xFF10172D), border: Border.all(color: Colors.white.withAlpha(18)), borderRadius: BorderRadius.circular(25)), child: Column(children: [...List.generate(levels.length, (index) { final item = levels[index]; final unlocked = progress.isLevelUnlocked(item.code); final done = progress.isLevelCompleted(item.code); return InkWell(onTap: unlocked ? () { onLevel(index); onTab(2); } : null, child: Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('${item.code} · ${item.title}', style: const TextStyle(fontWeight: FontWeight.w900)), Text(done ? 'Пройдено' : unlocked ? 'Доступно' : 'Закрыто', style: TextStyle(color: done ? green : unlocked ? sky : Colors.white38, fontSize: 11, fontWeight: FontWeight.w700))])), Container(width: 54, height: 54, alignment: Alignment.center, decoration: BoxDecoration(shape: BoxShape.circle, color: done ? green.withAlpha(45) : Colors.white.withAlpha(12), border: Border.all(color: done ? green : unlocked ? sky : Colors.white24, width: 2)), child: Text(done ? '✓' : unlocked ? item.code : '🔒', style: TextStyle(fontWeight: FontWeight.w900, color: done ? green : Colors.white))))])); })]))),
+    const SizedBox(height: 14), Row(children: [Expanded(child: _ModernAction(icon: Icons.menu_book_rounded, title: 'Учить слова', onTap: () => onTab(1))), const SizedBox(width: 10), Expanded(child: _ModernAction(icon: Icons.extension_rounded, title: 'Пройти квиз', onTap: () => onTab(2)))]),
+  ]);
+}
+
+class _ModernStat extends StatelessWidget { const _ModernStat({required this.label, required this.value}); final String label, value; @override Widget build(BuildContext context) => Expanded(child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0xFF10172D), borderRadius: BorderRadius.circular(17)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: const TextStyle(color: Colors.white54, fontSize: 11)), const SizedBox(height: 3), Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900))]))); }
+class _ModernAction extends StatelessWidget { const _ModernAction({required this.icon, required this.title, required this.onTap}); final IconData icon; final String title; final VoidCallback onTap; @override Widget build(BuildContext context) => FilledButton.tonalIcon(onPressed: onTap, icon: Icon(icon), label: Text(title), style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14), backgroundColor: purple.withAlpha(45), foregroundColor: Colors.white)); }
+
+class ModernWords extends StatelessWidget {
+  const ModernWords({super.key, required this.progress, required this.levelIndex, required this.onLevel});
+  final ProgressController progress; final int levelIndex; final ValueChanged<int> onLevel;
+  @override
+  Widget build(BuildContext context) { final level = levels[levelIndex]; return ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 20), children: [const Text('Слова', style: TextStyle(fontSize: 29, fontWeight: FontWeight.w900)), const SizedBox(height: 4), const Text('Запоминай слова и получай XP.', style: TextStyle(color: Colors.white60)), const SizedBox(height: 14), SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: List.generate(levels.length, (index) => Padding(padding: const EdgeInsets.only(right: 7), child: ChoiceChip(label: Text(levels[index].code), selected: index == levelIndex, onSelected: (_) => onLevel(index))))), const SizedBox(height: 12), ...level.words.map((word) { final id = '${level.code}-${word.word}'; final learned = progress.learnedWords.contains(id); return Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: const Color(0xFF10172D), borderRadius: BorderRadius.circular(19)), child: Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(word.word, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)), Text(word.translation, style: const TextStyle(color: sky)), const SizedBox(height: 7), Text(word.example, style: const TextStyle(color: Colors.white60, fontSize: 12))])), IconButton(onPressed: learned ? null : () { progress.learn(id); }, icon: Icon(learned ? Icons.check_circle_rounded : Icons.add_circle_outline_rounded, color: learned ? green : sky))])); })]); }
+}
+
+class ModernQuizzes extends StatelessWidget {
+  const ModernQuizzes({super.key, required this.progress, required this.levelIndex, required this.onLevel});
+  final ProgressController progress; final int levelIndex; final ValueChanged<int> onLevel;
+  @override
+  Widget build(BuildContext context) { final level = levels[levelIndex]; return ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 20), children: [const Text('Квизы', style: TextStyle(fontSize: 29, fontWeight: FontWeight.w900)), const SizedBox(height: 4), const Text('Закрепляй знания и открывай новые уровни.', style: TextStyle(color: Colors.white60)), const SizedBox(height: 14), SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: List.generate(levels.length, (index) => Padding(padding: const EdgeInsets.only(right: 7), child: ChoiceChip(label: Text(levels[index].code), selected: index == levelIndex, onSelected: (_) => onLevel(index))))), const SizedBox(height: 14), _QuizCard(emoji: '🎯', title: 'Квиз уровня ${level.code}', subtitle: '8 вопросов по словам уровня', onTap: () => _startQuiz(context, progress, level)), _QuizCard(emoji: '🔊', title: 'Голосовой квиз', subtitle: 'Слушай слово и выбирай перевод', onTap: () => _startQuiz(context, progress, level, voice: true))]); }
+}
+
+class _QuizCard extends StatelessWidget { const _QuizCard({required this.emoji, required this.title, required this.subtitle, required this.onTap}); final String emoji, title, subtitle; final VoidCallback onTap; @override Widget build(BuildContext context) => InkWell(onTap: onTap, borderRadius: BorderRadius.circular(22), child: Container(margin: const EdgeInsets.only(bottom: 11), padding: const EdgeInsets.all(18), decoration: BoxDecoration(color: const Color(0xFF10172D), borderRadius: BorderRadius.circular(22), border: Border.all(color: Colors.white.withAlpha(18))), child: Row(children: [Text(emoji, style: const TextStyle(fontSize: 32)), const SizedBox(width: 14), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)), const SizedBox(height: 4), Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 12))])), const Icon(Icons.arrow_forward_ios_rounded, color: sky, size: 16)]))); }
+
+class ModernProfile extends StatelessWidget { const ModernProfile({super.key, required this.progress}); final ProgressController progress; @override Widget build(BuildContext context) => ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 20), children: [const Text('Профиль', style: TextStyle(fontSize: 29, fontWeight: FontWeight.w900)), const SizedBox(height: 4), const Text('Весь твой прогресс — в одном месте.', style: TextStyle(color: Colors.white60)), const SizedBox(height: 14), _MobileAuthCard(progress: progress), const SizedBox(height: 12), Container(padding: const EdgeInsets.all(18), decoration: BoxDecoration(color: const Color(0xFF10172D), borderRadius: BorderRadius.circular(22)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(progress.displayName, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900)), const SizedBox(height: 5), Text('${progress.xp} XP · ${progress.learnedWords.length} слов · ${progress.quizzesDone} квизов', style: const TextStyle(color: Colors.white60))])), const SizedBox(height: 12), TextButton(onPressed: () { if (progress.user != null) progress.signOut(); }, child: const Text('Выйти из аккаунта'))]); }
+
+*/
 class ParlyoShell extends StatefulWidget {
   const ParlyoShell({super.key, required this.progress});
   final ProgressController progress;
@@ -3050,6 +3278,169 @@ class _ScaleTransitionDemoState extends State<ScaleTransitionDemo>
   );
 }
 
+class _MobileAuthCard extends StatefulWidget {
+  const _MobileAuthCard({required this.progress});
+  final ProgressController progress;
+
+  @override
+  State<_MobileAuthCard> createState() => _MobileAuthCardState();
+}
+
+class _MobileAuthCardState extends State<_MobileAuthCard> {
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  bool _register = false;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      if (_register) {
+        await widget.progress.signUp(_email.text, _password.text);
+      } else {
+        await widget.progress.signIn(_email.text, _password.text);
+      }
+    } on FirebaseAuthException catch (error) {
+      setState(() {
+        _error = error.message ?? error.code;
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = widget.progress.user;
+    return AnimatedBuilder(
+      animation: widget.progress,
+      builder: (context, _) => Container(
+        padding: const EdgeInsets.all(17),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(23),
+          border: Border.all(color: const Color(0xFFF0EDF5)),
+        ),
+        child: user != null
+            ? Row(
+                children: [
+                  const Icon(Icons.cloud_done_rounded, color: green),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Вход выполнен: ${user.email ?? 'Google account'}\nПрогресс синхронизируется',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => widget.progress.signOut(),
+                    child: const Text('Выйти'),
+                  ),
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Синхронизация прогресса',
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Войдите, чтобы сохранить результат на Android и iOS.',
+                    style: TextStyle(color: muted, fontSize: 11),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _busy
+                          ? null
+                          : () async {
+                              setState(() {
+                                _busy = true;
+                                _error = null;
+                              });
+                              try {
+                                await widget.progress.signInWithGoogle();
+                              } catch (error) {
+                                if (mounted) setState(() => _error = '$error');
+                              } finally {
+                                if (mounted) setState(() => _busy = false);
+                              }
+                            },
+                      icon: const Icon(Icons.account_circle_outlined),
+                      label: const Text('Continue with Google'),
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  TextField(
+                    controller: _email,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(
+                      labelText: 'Email',
+                      isDense: true,
+                    ),
+                  ),
+                  const SizedBox(height: 7),
+                  TextField(
+                    controller: _password,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Пароль',
+                      isDense: true,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: _busy ? null : _submit,
+                      child: Text(
+                        _busy
+                            ? 'Подождите…'
+                            : _register
+                            ? 'Создать аккаунт'
+                            : 'Войти',
+                      ),
+                    ),
+                  ),
+                  Center(
+                    child: TextButton(
+                      onPressed: _busy
+                          ? null
+                          : () => setState(() => _register = !_register),
+                      child: Text(
+                        _register ? 'Уже есть аккаунт' : 'Создать аккаунт',
+                      ),
+                    ),
+                  ),
+                  if (_error != null)
+                    Text(
+                      _error!,
+                      style: const TextStyle(color: Colors.red, fontSize: 11),
+                    ),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key, required this.progress});
   final ProgressController progress;
@@ -3070,6 +3461,8 @@ class ProfilePage extends StatelessWidget {
           subtitle: 'Весь твой прогресс — в одном месте.',
         ),
         const SizedBox(height: 17),
+        _MobileAuthCard(progress: progress),
+        const SizedBox(height: 13),
         Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(

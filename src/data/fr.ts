@@ -1,4 +1,5 @@
-import { buildWords, type Language, type RawWord } from "./types";
+import { FR_EXTRA_WORDS, FR_PHRASES } from "./packs/fr";
+import { buildPhrases, buildWords, type Language, type RawWord } from "./types";
 
 const A1: RawWord[] = [
   ["pain", "хлеб", "Nous achetons du pain frais.", "Мы покупаем свежий хлеб.", "food"],
@@ -62,10 +63,11 @@ export const fr: Language = {
   flag: "🇫🇷",
   speech: "fr-FR",
   words: [
-    ...buildWords("fr", "A1", A1),
-    ...buildWords("fr", "A2", A2),
-    ...buildWords("fr", "B1", B1),
-    ...buildWords("fr", "B2", B2),
-    ...buildWords("fr", "C1", C1),
+    ...buildWords("fr", "A1", [...A1, ...FR_EXTRA_WORDS.A1]),
+    ...buildWords("fr", "A2", [...A2, ...FR_EXTRA_WORDS.A2]),
+    ...buildWords("fr", "B1", [...B1, ...FR_EXTRA_WORDS.B1]),
+    ...buildWords("fr", "B2", [...B2, ...FR_EXTRA_WORDS.B2]),
+    ...buildWords("fr", "C1", [...C1, ...FR_EXTRA_WORDS.C1]),
   ],
+  phrases: buildPhrases("fr", FR_PHRASES),
 };

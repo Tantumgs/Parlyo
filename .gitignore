@@ -32,6 +32,18 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+node_modules/
+.npm-cache/
+.env.local
+
+# Vite / Vercel
+/dist/
+/.vercel/
+*.tsbuildinfo
+
+# QA artifacts
+/.shots/
+/.firebase/
 
 # Symbolication related
 app.*.symbols

@@ -1,34 +1,81 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  ArrowRight,
+  Check,
+  Keyboard,
+  RefreshCw,
+  Sparkles,
+  Trophy,
+  Volume2,
+  X,
+  Zap,
+} from "lucide-react";
 import { useStore } from "../state/store";
 import { calcXp, summarize, type Question, type Quiz } from "../lib/quiz";
+import { speak } from "../lib/speech";
+import { ProgressRing } from "./ui";
 
 const LETTERS = ["A", "B", "C", "D"];
 
-function speak(text: string, lang: string) {
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-  try {
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang;
-    utterance.rate = 0.92;
-    window.speechSynthesis.speak(utterance);
-  } catch {
-    /* озвучка недоступна — не мешаем игре */
-  }
+function Confetti({ count }: { count: number }) {
+  const pieces = useMemo(
+    () =>
+      Array.from({ length: count }, (_, index) => {
+        const palette = ["#d9ff63", "#7ef0d4", "#ffd166", "#ff9c8a", "#b8a1ff", "#8bd3ff"];
+        return {
+          left: Math.random() * 100,
+          delay: Math.random() * 1.1,
+          duration: 2.6 + Math.random() * 1.8,
+          drift: (Math.random() - 0.5) * 260,
+          color: palette[index % palette.length],
+          width: 5 + Math.random() * 5,
+          height: 8 + Math.random() * 8,
+          rotate: Math.random() * 180,
+        };
+      }),
+    [count]
+  );
+
+  return (
+    <div className="confetti" aria-hidden>
+      {pieces.map((piece, index) => (
+        <i
+          key={index}
+          style={
+            {
+              left: `${piece.left}%`,
+              background: piece.color,
+              width: piece.width,
+              height: piece.height,
+              animationDelay: `${piece.delay}s`,
+              animationDuration: `${piece.duration}s`,
+              transform: `rotate(${piece.rotate}deg)`,
+              "--drift": `${piece.drift}px`,
+            } as CSSProperties
+          }
+        />
+      ))}
+    </div>
+  );
 }
 
 export default function QuizPlayer({ quiz, onExit }: { quiz: Quiz; onExit: () => void }) {
-  const { finishQuiz, lang, showFlash } = useStore();
+  const { finishQuiz, lang, state } = useStore();
   const [index, setIndex] = useState(0);
   const [chosen, setChosen] = useState<number | null>(null);
   const [correctCount, setCorrectCount] = useState(0);
+  const [results, setResults] = useState<(boolean | null)[]>(() =>
+    Array(quiz.questions.length).fill(null)
+  );
   const [done, setDone] = useState(false);
   const [gainedXp, setGainedXp] = useState(0);
   const recorded = useRef(false);
+  const previousBest = useRef(state.quizBest[quiz.id] ?? 0);
 
   const question: Question | undefined = quiz.questions[index];
   const total = quiz.questions.length;
   const answered = chosen !== null;
+  const maxXp = calcXp(total, total);
 
   const advance = useCallback(() => {
     if (index + 1 >= total) {
@@ -42,19 +89,47 @@ export default function QuizPlayer({ quiz, onExit }: { quiz: Quiz; onExit: () =>
   const answer = useCallback(
     (optionIndex: number) => {
       if (answered || !question) return;
+      const correct = optionIndex === question.correct;
       setChosen(optionIndex);
-      if (optionIndex === question.correct) setCorrectCount((count) => count + 1);
+      setResults((current) => {
+        const next = [...current];
+        next[index] = correct;
+        return next;
+      });
+      if (correct) setCorrectCount((count) => count + 1);
     },
-    [answered, question]
+    [answered, question, index]
   );
 
   useEffect(() => {
-    if (quiz.kind === "voice" && question?.speak) {
+    if ((quiz.kind === "voice" || question?.kind === "reply") && question?.speak) {
       speak(question.speak, lang.speech);
     }
   }, [quiz.kind, question, lang.speech, index]);
 
   useEffect(() => () => window.speechSynthesis?.cancel(), []);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (done) return;
+      if (!answered) {
+        const byNumber = Number(event.key) - 1;
+        const byLetter = LETTERS.indexOf(event.key.toUpperCase());
+        const option = byNumber >= 0 && byNumber < 4 ? byNumber : byLetter;
+        if (option >= 0 && option < 4) {
+          event.preventDefault();
+          answer(option);
+        }
+        return;
+      }
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        advance();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [answered, answer, advance, done]);
 
   useEffect(() => {
     if (!done || recorded.current) return;
@@ -71,22 +146,44 @@ export default function QuizPlayer({ quiz, onExit }: { quiz: Quiz; onExit: () =>
   }, [done, correctCount, total, finishQuiz, quiz.id]);
 
   const restart = () => {
+    previousBest.current = Math.max(
+      previousBest.current,
+      total === 0 ? 0 : Math.round((correctCount / total) * 100)
+    );
     recorded.current = false;
     setIndex(0);
     setChosen(null);
     setCorrectCount(0);
+    setResults(Array(total).fill(null));
     setDone(false);
     setGainedXp(0);
   };
 
   if (total === 0) {
     return (
-      <div className="card page p-6 text-center">
-        <div className="text-3xl">🤔</div>
-        <p className="mt-2 text-white/70">Для этого языка пока не хватает слов, чтобы собрать куиз.</p>
-        <button type="button" className="btn btn-primary mt-4" onClick={onExit}>
-          К списку куизов
-        </button>
+      <div className="quiz-overlay">
+        <div className="quiz-shell">
+          <header className="quiz-topbar">
+            <button type="button" className="quiz-exit" onClick={onExit}>
+              <X size={15} />
+              <span>Выйти</span>
+            </button>
+          </header>
+          <div className="result-wrap">
+            <div className="panel result-card">
+              <div className="result-emoji">🤔</div>
+              <h2 className="result-title">Пока не из чего собрать квиз</h2>
+              <p className="result-sub">
+                Для этого языка и уровня не хватает слов. Попробуй другой уровень или тему.
+              </p>
+              <div className="result-actions">
+                <button type="button" className="btn btn-lime" onClick={onExit}>
+                  К списку квизов
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -94,174 +191,315 @@ export default function QuizPlayer({ quiz, onExit }: { quiz: Quiz; onExit: () =>
   if (done) {
     const { percent, verdict } = summarize(correctCount, total);
     const perfect = correctCount === total;
-    const radius = 54;
-    const circumference = 2 * Math.PI * radius;
+    const isRecord = percent > previousBest.current && previousBest.current > 0;
     return (
-      <div className="card page p-6 text-center">
-        <div className="text-5xl">{perfect ? "🏆" : percent >= 60 ? "🎉" : "💪"}</div>
-        <h2 className="mt-3 text-2xl font-extrabold">{verdict}</h2>
-        <p className="text-sm text-white/55">{quiz.title}</p>
+      <div className="quiz-overlay">
+        {percent >= 60 && <Confetti count={perfect ? 56 : 30} />}
+        <div className="quiz-shell">
+          <header className="quiz-topbar">
+            <button type="button" className="quiz-exit" onClick={onExit}>
+              <X size={15} />
+              <span>Выйти</span>
+            </button>
+            <div className="quiz-progress">
+              <div className="quiz-segments">
+                {results.map((result, resultIndex) => (
+                  <span
+                    key={resultIndex}
+                    className={`quiz-seg ${result === true ? "correct" : result === false ? "wrong" : ""}`}
+                  />
+                ))}
+              </div>
+              <span className="quiz-counter">{total} / {total}</span>
+            </div>
+            <span className="quiz-xp">
+              <Zap size={13} /> +{gainedXp}
+            </span>
+          </header>
 
-        <div className="relative mx-auto mt-5 h-36 w-36">
-          <svg viewBox="0 0 128 128" className="h-full w-full -rotate-90">
-            <circle cx="64" cy="64" r={radius} fill="none" stroke="rgba(255,255,255,0.09)" strokeWidth="11" />
-            <circle
-              className="ring-progress"
-              cx="64"
-              cy="64"
-              r={radius}
-              fill="none"
-              stroke="url(#quizGrad)"
-              strokeWidth="11"
-              strokeLinecap="round"
-              strokeDasharray={circumference}
-              strokeDashoffset={circumference - (circumference * percent) / 100}
-            />
-            <defs>
-              <linearGradient id="quizGrad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#7c5cff" />
-                <stop offset="100%" stopColor="#22d3ee" />
-              </linearGradient>
-            </defs>
-          </svg>
-          <div className="absolute inset-0 grid place-items-center text-3xl font-black tabular-nums">{percent}%</div>
-        </div>
+          <div className="result-wrap">
+            <div className="panel result-card">
+              {isRecord && (
+                <div className="record-badge">
+                  <Sparkles size={12} />
+                  новый личный рекорд
+                </div>
+              )}
+              <div className="result-emoji">{perfect ? "🏆" : percent >= 60 ? "🎉" : "💪"}</div>
+              <h2 className="result-title">{verdict}</h2>
+              <p className="result-sub">{quiz.title} · {quiz.emoji}</p>
 
-        <div className="mt-5 grid grid-cols-3 gap-2 text-center">
-          <div className="rounded-2xl bg-white/5 p-3">
-            <div className="text-lg font-extrabold tabular-nums">{correctCount}</div>
-            <div className="text-[11px] text-white/50">верно</div>
+              <ProgressRing value={percent / 100} size={180} stroke={10} className="result-ring-wrap">
+                <div className="result-percent">
+                  <b>{percent}%</b>
+                  <span>результат</span>
+                </div>
+              </ProgressRing>
+
+              <div className="result-stats">
+                <div className="result-stat">
+                  <b className="text-[var(--lime)]">{correctCount}</b>
+                  <span>верно</span>
+                </div>
+                <div className="result-stat">
+                  <b className="text-[#ff9c8a]">{total - correctCount}</b>
+                  <span>ошибок</span>
+                </div>
+                <div className="result-stat">
+                  <b className="text-[var(--amber)]">+{gainedXp}</b>
+                  <span>XP</span>
+                </div>
+              </div>
+
+              <p className="result-note">
+                5 XP за каждый верный ответ
+                {perfect ? " · +25 XP бонус за идеальный раунд" : " · +25 XP бонус за 100%"}
+              </p>
+
+              <div className="result-actions">
+                <button type="button" className="btn btn-lime" onClick={restart}>
+                  <RefreshCw size={15} />
+                  Ещё раз
+                </button>
+                <button type="button" className="btn btn-glass" onClick={onExit}>
+                  Другой квиз
+                  <ArrowRight size={15} />
+                </button>
+              </div>
+            </div>
           </div>
-          <div className="rounded-2xl bg-white/5 p-3">
-            <div className="text-lg font-extrabold tabular-nums">{total - correctCount}</div>
-            <div className="text-[11px] text-white/50">ошибок</div>
-          </div>
-          <div className="rounded-2xl bg-white/5 p-3">
-            <div className="text-lg font-extrabold tabular-nums text-cyan-300">+{gainedXp}</div>
-            <div className="text-[11px] text-white/50">XP</div>
-          </div>
-        </div>
-
-        <p className="mt-3 text-xs text-white/45">
-          5 XP за верный ответ{perfect ? " и 25 XP бонус за идеальный результат" : ""}
-        </p>
-
-        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-center">
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => {
-              showFlash("Ещё раз!");
-              restart();
-            }}
-          >
-            🔄 Пройти ещё раз
-          </button>
-          <button type="button" className="btn btn-ghost" onClick={onExit}>
-            Другой куиз
-          </button>
         </div>
       </div>
     );
   }
 
+  if (!question) return null;
+
+  const contextParts = question.kind === "context" ? question.prompt.split("____") : null;
+
   return (
-    <div className="page">
-      <div className="mb-3 flex items-center gap-3">
-        <button type="button" className="btn btn-ghost !px-3 !py-2 text-sm" onClick={onExit}>
-          ← Выход
-        </button>
-        <div className="progress-track h-2 flex-1">
-          <div className="progress-fill" style={{ width: `${((index + (answered ? 1 : 0)) / total) * 100}%` }} />
-        </div>
-        <span className="text-xs font-bold tabular-nums text-white/60">
-          {index + 1}/{total}
-        </span>
-      </div>
-
-      <div className="card p-5">
-        <div className="flex items-center justify-between gap-3">
-          <span className="rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ background: "rgba(255,255,255,0.08)", color: quiz.accent }}>
-            {quiz.emoji} {quiz.title}
+    <div className="quiz-overlay">
+      <div className="quiz-shell">
+        <header className="quiz-topbar">
+          <button type="button" className="quiz-exit" onClick={onExit}>
+            <X size={15} />
+            <span>Выйти</span>
+          </button>
+          <div className="quiz-progress">
+            <div className="quiz-segments" aria-hidden>
+              {quiz.questions.map((item, segmentIndex) => (
+                <span
+                  key={item.id}
+                  className={`quiz-seg ${
+                    results[segmentIndex] === true
+                      ? "correct"
+                      : results[segmentIndex] === false
+                        ? "wrong"
+                        : segmentIndex === index
+                          ? "current"
+                          : ""
+                  }`}
+                />
+              ))}
+            </div>
+            <span className="quiz-counter">
+              {index + 1} / {total}
+            </span>
+          </div>
+          <span className="quiz-xp" title="Максимум XP за этот квиз">
+            <Zap size={13} /> +{maxXp}
           </span>
-          <span className="text-[11px] text-white/45">{question.label}</span>
-        </div>
+        </header>
 
-        <div key={question.id} className="pop mt-4">
-          {question.kind === "voice" && (
-            <button
-              type="button"
-              onClick={() => question.speak && speak(question.speak, lang.speech)}
-              className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 text-3xl shadow-lg shadow-orange-500/30 transition hover:scale-105"
-              aria-label="Прослушать слово"
-            >
-              🔊
-            </button>
-          )}
-          <h2
-            className={`text-center font-extrabold ${
-              question.kind === "context" ? "font-mono text-lg leading-relaxed" : "text-2xl"
-            }`}
-          >
-            {question.prompt}
-          </h2>
-          {question.sub && <p className="mt-1.5 text-center text-sm text-white/50">{question.sub}</p>}
-        </div>
-
-        <div className="mt-5 grid gap-2.5">
-          {question.options.map((option, optionIndex) => {
-            const isCorrect = optionIndex === question.correct;
-            const isChosen = optionIndex === chosen;
-            let style = "border-white/12 bg-white/5 hover:border-white/30 hover:bg-white/10";
-            if (answered) {
-              if (isCorrect) style = "border-emerald-400/60 bg-emerald-400/15 text-emerald-200";
-              else if (isChosen) style = "border-rose-400/60 bg-rose-400/15 text-rose-200 shake";
-              else style = "border-white/8 bg-white/[0.02] text-white/40";
-            }
-            return (
-              <button
-                key={option}
-                type="button"
-                onClick={() => answer(optionIndex)}
-                disabled={answered}
-                className={`flex items-center gap-3 rounded-2xl border px-4 py-3 text-left text-[15px] font-semibold transition ${style}`}
-              >
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-black/25 text-[12px] font-black">
-                  {LETTERS[optionIndex]}
+        <div className="quiz-stage">
+          <div className="panel quiz-card-main" key={question.id}>
+            <div className="quiz-tags">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className="chip"
+                  style={{ color: quiz.accent, borderColor: `${quiz.accent}44` }}
+                >
+                  {quiz.emoji} {quiz.title}
                 </span>
-                <span className="flex-1">{option}</span>
-                {answered && isCorrect && <span>✓</span>}
-                {answered && isChosen && !isCorrect && <span>✕</span>}
-              </button>
-            );
-          })}
-        </div>
+                {question.speak && question.kind !== "voice" && (
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    style={{ width: 30, height: 30, borderRadius: 10 }}
+                    onClick={() => question.speak && speak(question.speak, lang.speech)}
+                    aria-label="Прослушать слово"
+                  >
+                    <Volume2 size={14} />
+                  </button>
+                )}
+              </div>
+              <span className="quiz-question-label">{question.label}</span>
+            </div>
 
-        {answered && question.reveal && (
-          <div className="pop mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-lg font-extrabold">{question.reveal.word}</span>
-              <span className="text-white/40">—</span>
-              <span className="text-lg text-cyan-300">{question.reveal.translation}</span>
+            <div className="quiz-question">
               {question.kind === "voice" && (
                 <button
                   type="button"
-                  className="ml-auto rounded-full bg-white/10 px-3 py-1 text-xs font-bold hover:bg-white/20"
-                  onClick={() => speak(question.reveal!.word, lang.speech)}
+                  className="audio-orb"
+                  onClick={() => question.speak && speak(question.speak, lang.speech)}
+                  aria-label="Прослушать слово ещё раз"
                 >
-                  🔊 Ещё раз
+                  <Volume2 size={38} />
                 </button>
               )}
+              {contextParts ? (
+                <p className="question-context">
+                  {contextParts[0]}
+                  <mark>____</mark>
+                  {contextParts[1]}
+                </p>
+              ) : (
+                <h2
+                  className={`question-text ${
+                    question.kind === "reply" || question.kind === "phrase"
+                      ? "question-text-long"
+                      : ""
+                  }`}
+                >
+                  {question.prompt}
+                </h2>
+              )}
+              {question.sub && <p className="question-sub">{question.sub}</p>}
             </div>
-            <p className="mt-2 text-sm text-white/70">{question.reveal.example}</p>
-            <p className="text-sm text-white/45">{question.reveal.exampleTranslation}</p>
-          </div>
-        )}
 
-        <div className="mt-5 flex justify-end">
-          <button type="button" className="btn btn-primary" onClick={advance} disabled={!answered}>
-            {index + 1 >= total ? "Завершить куиз →" : "Далее →"}
-          </button>
+            <div
+              className={`options-grid ${
+                question.kind === "reply" || question.kind === "phrase"
+                  ? "options-grid-dialogue"
+                  : ""
+              }`}
+            >
+              {question.options.map((option, optionIndex) => {
+                const isCorrect = optionIndex === question.correct;
+                const isChosen = optionIndex === chosen;
+                const stateClass = answered
+                  ? isCorrect
+                    ? "correct"
+                    : isChosen
+                      ? "incorrect"
+                      : "muted"
+                  : "";
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => answer(optionIndex)}
+                    disabled={answered}
+                    className={`option ${stateClass}`}
+                  >
+                    <span className="option-letter">{LETTERS[optionIndex]}</span>
+                    <span className="option-text">{option}</span>
+                    {answered && isCorrect && (
+                      <span className="option-mark ok">
+                        <Check size={14} strokeWidth={3} />
+                      </span>
+                    )}
+                    {answered && isChosen && !isCorrect && (
+                      <span className="option-mark no">
+                        <X size={14} strokeWidth={3} />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {answered && question.reveal && (
+              <div className="reveal">
+                <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <span className="reveal-word">{question.reveal.word}</span>
+                  <span className="reveal-translation">{question.reveal.translation}</span>
+                </div>
+                {question.kind === "voice" && (
+                  <button
+                    type="button"
+                    className="chip"
+                    onClick={() => question.reveal && speak(question.reveal.word, lang.speech)}
+                  >
+                    <Volume2 size={12} />
+                    ещё раз
+                  </button>
+                )}
+                <div className="reveal-example">
+                  «{question.reveal.example}»
+                  <span>«{question.reveal.exampleTranslation}»</span>
+                </div>
+              </div>
+            )}
+
+            {answered && question.dialogue && (
+              <div className="reveal dialogue-reveal">
+                <div className="dialogue-line">
+                  <span className="dialogue-role">—</span>
+                  <div className="dialogue-copy">
+                    <div className="dialogue-text">{question.dialogue.prompt}</div>
+                    <div className="dialogue-translation">{question.dialogue.promptTranslation}</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-btn dialogue-audio"
+                    onClick={() =>
+                      question.dialogue && speak(question.dialogue.prompt, lang.speech)
+                    }
+                    aria-label="Прослушать вопрос"
+                  >
+                    <Volume2 size={14} />
+                  </button>
+                </div>
+                <div className="dialogue-line dialogue-line-reply">
+                  <span className="dialogue-role">→</span>
+                  <div className="dialogue-copy">
+                    <div className="dialogue-text">{question.dialogue.reply}</div>
+                    <div className="dialogue-translation">{question.dialogue.replyTranslation}</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-btn dialogue-audio"
+                    onClick={() =>
+                      question.dialogue && speak(question.dialogue.reply, lang.speech)
+                    }
+                    aria-label="Прослушать ответ"
+                  >
+                    <Volume2 size={14} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="quiz-actions">
+              <span className="quiz-hint">
+                <Keyboard size={13} />
+                1–4 выбрать · Enter дальше
+              </span>
+              <button
+                type="button"
+                className="btn btn-lime"
+                onClick={advance}
+                disabled={!answered}
+              >
+                {index + 1 >= total ? (
+                  <>
+                    Завершить квиз
+                    <Trophy size={15} />
+                  </>
+                ) : (
+                  <>
+                    Далее
+                    <ArrowRight size={15} />
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="quiz-bottom-note">
+          {quiz.questions.length} вопросов · +{maxXp} XP максимум · без таймера, в своём темпе
         </div>
       </div>
     </div>

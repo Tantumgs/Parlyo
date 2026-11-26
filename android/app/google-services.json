@@ -1,0 +1,55 @@
+{
+  "project_info": {
+    "project_number": "389318019863",
+    "firebase_url": "https://parlyo-default-rtdb.firebaseio.com",
+    "project_id": "parlyo",
+    "storage_bucket": "parlyo.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:389318019863:android:c7081368ffc97700050552",
+        "android_client_info": {
+          "package_name": "com.example.parlyo_tmp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "389318019863-vho0731otv15b1p45rq6fmtf3bkjheu4.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.parlyo_tmp",
+            "certificate_hash": "84cbe62353dc3b45ab6dddd6b00e8592c09af499"
+          }
+        },
+        {
+          "client_id": "389318019863-8t0rdqe50urqo4uvh1ei9q8ljc0p8p4q.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDNTNndp1WDqynmPXm7bwjwydjr-a-v_QA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "389318019863-8t0rdqe50urqo4uvh1ei9q8ljc0p8p4q.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "389318019863-jqd8v965b0kjpl8qgssg6gc922a2uv9a.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.parlyo.app"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

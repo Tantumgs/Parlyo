@@ -62,3 +62,16 @@ export function describeXp(xp: number): LevelState {
 export function dailyGoalProgress(dailyXp: number): number {
   return Math.min(1, dailyXp / DAILY_GOAL);
 }
+
+export interface LeagueState {
+  name: string;
+  next: string | null;
+  nextAt: number;
+}
+
+/** Лига по суммарному XP — одна логика для HUD и главной. */
+export function leagueFor(xp: number): LeagueState {
+  if (xp >= 3000) return { name: "Золото", next: null, nextAt: 3000 };
+  if (xp >= 800) return { name: "Серебро", next: "Золото", nextAt: 3000 };
+  return { name: "Бронза", next: "Серебро", nextAt: 800 };
+}

@@ -10,6 +10,8 @@ export type ThemeId =
   | "feelings"
   | "sport";
 
+export type ScenarioId = "intro" | "cafe" | "travel" | "work" | "smalltalk" | "opinion";
+
 export interface Word {
   id: string;
   word: string;
@@ -20,6 +22,16 @@ export interface Word {
   theme: ThemeId;
 }
 
+export interface Phrase {
+  id: string;
+  prompt: string;
+  promptTranslation: string;
+  reply: string;
+  replyTranslation: string;
+  level: LevelCode;
+  scenario: ScenarioId;
+}
+
 export interface Language {
   code: string;
   name: string;
@@ -27,10 +39,22 @@ export interface Language {
   flag: string;
   speech: string;
   words: Word[];
+  phrases: Phrase[];
 }
 
 /** [word, translation, example, exampleTranslation, theme] */
 export type RawWord = [string, string, string, string, ThemeId];
+
+/** [prompt, promptTranslation, reply, replyTranslation, level, scenario] */
+export type RawPhrase = [string, string, string, string, LevelCode, ScenarioId];
+
+export interface ScenarioInfo {
+  id: ScenarioId;
+  name: string;
+  about: string;
+  emoji: string;
+  accent: string;
+}
 
 export interface LevelInfo {
   code: LevelCode;
@@ -89,6 +113,51 @@ export const THEMES: { id: ThemeId; name: string; emoji: string; about: string }
   { id: "sport", name: "Спорт", emoji: "⚽", about: "тренировки и соревнования" },
 ];
 
+export const SCENARIOS: ScenarioInfo[] = [
+  {
+    id: "intro",
+    name: "Знакомство",
+    about: "имя, откуда ты и чем занимаешься",
+    emoji: "👋",
+    accent: "#7ef0d4",
+  },
+  {
+    id: "cafe",
+    name: "В кафе",
+    about: "заказ, счёт и маленькие просьбы",
+    emoji: "☕",
+    accent: "#ffb86b",
+  },
+  {
+    id: "travel",
+    name: "В пути",
+    about: "билеты, транспорт и задержки",
+    emoji: "🧭",
+    accent: "#8bd3ff",
+  },
+  {
+    id: "work",
+    name: "На работе",
+    about: "встречи, сроки и рабочие вопросы",
+    emoji: "🗂️",
+    accent: "#b8a1ff",
+  },
+  {
+    id: "smalltalk",
+    name: "Светская беседа",
+    about: "погода, планы и приятная болтовня",
+    emoji: "🌤️",
+    accent: "#ffd166",
+  },
+  {
+    id: "opinion",
+    name: "Мнение",
+    about: "согласие, сомнение и аргументы",
+    emoji: "💬",
+    accent: "#ff9c8a",
+  },
+];
+
 export const LEVEL_BY_CODE: Record<LevelCode, LevelInfo> = LEVELS.reduce(
   (acc, level) => {
     acc[level.code] = level;
@@ -105,6 +174,14 @@ export const THEME_BY_ID: Record<ThemeId, { name: string; emoji: string }> = THE
   {} as Record<ThemeId, { name: string; emoji: string }>
 );
 
+export const SCENARIO_BY_ID: Record<ScenarioId, ScenarioInfo> = SCENARIOS.reduce(
+  (acc, scenario) => {
+    acc[scenario.id] = scenario;
+    return acc;
+  },
+  {} as Record<ScenarioId, ScenarioInfo>
+);
+
 export function buildWords(langCode: string, level: LevelCode, rows: RawWord[]): Word[] {
   return rows.map(([word, translation, example, exampleTranslation, theme], index) => ({
     id: `${langCode}-${level}-${index}`,
@@ -114,6 +191,18 @@ export function buildWords(langCode: string, level: LevelCode, rows: RawWord[]):
     exampleTranslation,
     level,
     theme,
+  }));
+}
+
+export function buildPhrases(langCode: string, rows: RawPhrase[]): Phrase[] {
+  return rows.map(([prompt, promptTranslation, reply, replyTranslation, level, scenario], index) => ({
+    id: `${langCode}-phrase-${index}`,
+    prompt,
+    promptTranslation,
+    reply,
+    replyTranslation,
+    level,
+    scenario,
   }));
 }
 

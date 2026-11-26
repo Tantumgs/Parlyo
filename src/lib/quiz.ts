@@ -1,7 +1,27 @@
-import type { Language, LevelCode, ThemeId, Word } from "../data";
+import type {
+  Language,
+  LevelCode,
+  Phrase,
+  ScenarioInfo,
+  ThemeId,
+  Word,
+} from "../data";
 import { levelOf, wordsOfTheme } from "../data";
 
-export type QuestionKind = "translate" | "reverse" | "context" | "voice";
+export type QuestionKind =
+  | "translate"
+  | "reverse"
+  | "context"
+  | "voice"
+  | "reply"
+  | "phrase";
+
+export interface Dialogue {
+  prompt: string;
+  promptTranslation: string;
+  reply: string;
+  replyTranslation: string;
+}
 
 export interface Question {
   id: string;
@@ -13,9 +33,10 @@ export interface Question {
   correct: number;
   speak?: string;
   reveal?: { word: string; translation: string; example: string; exampleTranslation: string };
+  dialogue?: Dialogue;
 }
 
-export type QuizKind = "level" | "theme" | "voice";
+export type QuizKind = "level" | "theme" | "voice" | "communication" | "scenario";
 
 export interface Quiz {
   id: string;
@@ -89,7 +110,6 @@ function buildQuestion(
       kind,
       label: kind === "voice" ? "Прослушай и выбери перевод" : "Перевод на русский",
       prompt: kind === "voice" ? "Что ты услышал?" : `Как переводится «${word.word}»?`,
-      sub: kind === "voice" ? undefined : word.word,
       options,
       correct: options.indexOf(word.translation),
       speak: word.word,
@@ -129,6 +149,90 @@ function buildQuestion(
 
 const KIND_ORDER: QuestionKind[] = ["translate", "reverse", "context"];
 
+function phraseDistractors(
+  pool: Phrase[],
+  correct: string,
+  field: "prompt" | "reply",
+  count: number
+): string[] {
+  const seen = new Set([correct]);
+  const out: string[] = [];
+  for (const candidate of pick(pool, pool.length)) {
+    const value = field === "prompt" ? candidate.prompt : candidate.reply;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+    if (out.length === count) break;
+  }
+  return out;
+}
+
+function buildPhraseQuestion(
+  phrase: Phrase,
+  kind: "reply" | "phrase",
+  pool: Phrase[],
+  index: number
+): Question | null {
+  const dialogue: Dialogue = {
+    prompt: phrase.prompt,
+    promptTranslation: phrase.promptTranslation,
+    reply: phrase.reply,
+    replyTranslation: phrase.replyTranslation,
+  };
+
+  if (kind === "reply") {
+    const options = shuffle([phrase.reply, ...phraseDistractors(pool, phrase.reply, "reply", 3)]);
+    if (options.length < 4) return null;
+    return {
+      id: `${phrase.id}-reply-${index}`,
+      kind,
+      label: "Что ответишь?",
+      prompt: phrase.prompt,
+      sub: phrase.promptTranslation,
+      options,
+      correct: options.indexOf(phrase.reply),
+      speak: phrase.prompt,
+      dialogue,
+    };
+  }
+
+  const options = shuffle([phrase.prompt, ...phraseDistractors(pool, phrase.prompt, "prompt", 3)]);
+  if (options.length < 4) return null;
+  return {
+    id: `${phrase.id}-phrase-${index}`,
+    kind,
+    label: "Как это сказать?",
+    prompt: phrase.promptTranslation,
+    options,
+    correct: options.indexOf(phrase.prompt),
+    dialogue,
+  };
+}
+
+function makePhraseQuestions(
+  pool: Phrase[],
+  allPhrases: Phrase[],
+  count: number,
+  kinds: ("reply" | "phrase")[]
+): Question[] {
+  const combos: { phrase: Phrase; kind: "reply" | "phrase" }[] = [];
+  for (const phrase of pool) {
+    for (const kind of kinds) {
+      combos.push({ phrase, kind });
+    }
+  }
+
+  const questions: Question[] = [];
+  let index = 0;
+  for (const combo of shuffle(combos)) {
+    if (questions.length >= count) break;
+    const question = buildPhraseQuestion(combo.phrase, combo.kind, allPhrases, index);
+    index += 1;
+    if (question) questions.push(question);
+  }
+  return questions;
+}
+
 function makeQuestions(
   pool: Word[],
   allWords: Word[],
@@ -153,13 +257,13 @@ function makeQuestions(
   return questions;
 }
 
-/** Куиз по уровню: вопросы составляются из слов этого уровня. */
+/** Квиз по уровню: вопросы составляются из слов этого уровня. */
 export function levelQuiz(lang: Language, level: LevelCode, accent: string, about: string): Quiz {
   const pool = levelOf(lang.words, level);
   return {
     id: `level-${lang.code}-${level}`,
     kind: "level",
-    title: `Куиз уровня ${level}`,
+    title: `Квиз уровня ${level}`,
     subtitle: about,
     emoji: "🎯",
     accent,
@@ -167,7 +271,7 @@ export function levelQuiz(lang: Language, level: LevelCode, accent: string, abou
   };
 }
 
-/** Тематический куиз: слова этой темы со всех уровней. */
+/** Тематический квиз: слова этой темы со всех уровней. */
 export function themeQuiz(lang: Language, theme: ThemeId, emoji: string, name: string): Quiz {
   const pool = wordsOfTheme(lang.words, theme);
   return {
@@ -181,7 +285,7 @@ export function themeQuiz(lang: Language, theme: ThemeId, emoji: string, name: s
   };
 }
 
-/** Голосовой куиз: звучит слово, нужно выбрать перевод. */
+/** Голосовой квиз: звучит слово, нужно выбрать перевод. */
 export function voiceQuiz(
   lang: Language,
   level: LevelCode,
@@ -204,11 +308,39 @@ export function voiceQuiz(
   return {
     id: `voice-${lang.code}-${level}`,
     kind: "voice",
-    title: "Голосовой куиз",
+    title: "Голосовой квиз",
     subtitle: "слушай слово и выбирай перевод",
     emoji: "🔊",
-    accent: "#f59e0b",
+    accent,
     questions,
+  };
+}
+
+/** Квиз по фразам уровня: что могут спросить и как ответить. */
+export function communicationQuiz(lang: Language, level: LevelCode, accent: string): Quiz {
+  const pool = lang.phrases.filter((phrase) => phrase.level === level);
+  return {
+    id: `communication-${lang.code}-${level}`,
+    kind: "communication",
+    title: `Фразы уровня ${level}`,
+    subtitle: "живые вопросы и ответы для разговора",
+    emoji: "💬",
+    accent,
+    questions: makePhraseQuestions(pool, lang.phrases, 8, ["reply", "phrase"]),
+  };
+}
+
+/** Квиз по жизненному сценарию: диалоги кафе, работы, путешествий. */
+export function scenarioQuiz(lang: Language, scenario: ScenarioInfo): Quiz {
+  const pool = lang.phrases.filter((phrase) => phrase.scenario === scenario.id);
+  return {
+    id: `scenario-${lang.code}-${scenario.id}`,
+    kind: "scenario",
+    title: scenario.name,
+    subtitle: scenario.about,
+    emoji: scenario.emoji,
+    accent: scenario.accent,
+    questions: makePhraseQuestions(pool, pool, 6, ["reply", "phrase"]),
   };
 }
 
