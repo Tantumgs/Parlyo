@@ -31,6 +31,9 @@ import { plural } from "../lib/plural";
 import { speak } from "../lib/speech";
 import { ProgressBar, ProgressRing, StatTile } from "../components/ui";
 
+/** Пока нет реальных игроков, недельную лигу не показываем. */
+const SHOW_WEEKLY_LEAGUE = false;
+
 export default function Home({
   level,
   onNavigate,
@@ -260,7 +263,11 @@ export default function Home({
       </div>
 
       {/* DAILY QUESTS */}
-      <section className="panel quests-card span-7">
+      <section
+        className={`panel quests-card ${
+          SHOW_WEEKLY_LEAGUE ? "span-7" : "span-12 is-wide"
+        }`}
+      >
         <div className="quests-head">
           <div>
             <div className="eyebrow eyebrow-lime">
@@ -343,46 +350,48 @@ export default function Home({
         </div>
       </section>
 
-      {/* LEAGUE */}
-      <section className="panel league-card span-5">
-        <div className="league-head">
-          <div>
-            <div className="eyebrow" style={{ color: "#ffd166" }}>
-              <Trophy size={12} />
-              Лига недели
+      {/* LEAGUE — включаем, когда появятся реальные игроки */}
+      {SHOW_WEEKLY_LEAGUE && (
+        <section className="panel league-card span-5">
+          <div className="league-head">
+            <div>
+              <div className="eyebrow" style={{ color: "#ffd166" }}>
+                <Trophy size={12} />
+                Лига недели
+              </div>
+              <h2 className="display display-card mt-2">Ты в игре</h2>
             </div>
-            <h2 className="display display-card mt-2">Ты в игре</h2>
+            <span className="league-badge">{league.name}</span>
           </div>
-          <span className="league-badge">{league.name}</span>
-        </div>
 
-        <div className="league-list">
-          {leagueRows.map((entry, index) => (
-            <div
-              key={entry.name}
-              className={`league-row ${entry.you ? "is-you" : ""}`}
-            >
-              <span className={`league-rank rank-${index + 1}`}>{index + 1}</span>
-              <span className="league-avatar">{entry.avatar}</span>
-              <span className="league-name">
-                {entry.you ? "Ты" : entry.name}
-                {entry.you && <small>это ты</small>}
-              </span>
-              <span className="league-xp">{entry.xp} XP</span>
-            </div>
-          ))}
-        </div>
+          <div className="league-list">
+            {leagueRows.map((entry, index) => (
+              <div
+                key={entry.name}
+                className={`league-row ${entry.you ? "is-you" : ""}`}
+              >
+                <span className={`league-rank rank-${index + 1}`}>{index + 1}</span>
+                <span className="league-avatar">{entry.avatar}</span>
+                <span className="league-name">
+                  {entry.you ? "Ты" : entry.name}
+                  {entry.you && <small>это ты</small>}
+                </span>
+                <span className="league-xp">{entry.xp} XP</span>
+              </div>
+            ))}
+          </div>
 
-        <div className="league-foot">
-          <span>
-            <TrendingUp size={12} />
-            {weekTotal} XP за неделю
-          </span>
-          <span className="league-note">
-            {league.next ? `Топ-3 → ${league.next.toLowerCase()}` : "Высшая лига"}
-          </span>
-        </div>
-      </section>
+          <div className="league-foot">
+            <span>
+              <TrendingUp size={12} />
+              {weekTotal} XP за неделю
+            </span>
+            <span className="league-note">
+              {league.next ? `Топ-3 → ${league.next.toLowerCase()}` : "Высшая лига"}
+            </span>
+          </div>
+        </section>
+      )}
 
       {/* ROADMAP */}
       <section className="panel panel-pad span-8">
