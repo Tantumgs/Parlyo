@@ -547,7 +547,7 @@ export default function Home({
               <Zap size={12} /> +25 XP
             </span>
             <span className="chip">
-              <Trophy size={12} /> в лигу
+              <TrendingUp size={12} /> к прогрессу
             </span>
           </div>
           <button
